@@ -10,7 +10,7 @@ jobs:
     env:
       KERNEL_NAME: "Cosmicカーネル"
       DEVICE: "violet"
-      BRANCH_NAME: "main"
+      BRANCH_NAME: "lineage-23.2"
       USER_TAG: "@IamZeus14"
       LOG: "build.log"
       GOFILE_RETRY_MAX: 6
