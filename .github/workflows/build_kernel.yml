@@ -25,37 +25,9 @@ jobs:
           ref: ${{ env.BRANCH_NAME }}
           submodules: recursive
 
-      - name: Free Disk Space & Set Up zRAM
+      - name: Initialize Telegram Progress Monitor
         run: |
           set -euo pipefail
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          
-          sudo modprobe zram num_devices=1 || true
-          echo zstd | sudo tee /sys/block/zram0/comp_algorithm > /dev/null || true
-          echo 16G | sudo tee /sys/block/zram0/disksize
-          sudo mkswap /dev/zram0
-          sudo swapon -p 32767 /dev/zram0
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev make gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi unzip lz4 zstd git-lfs curl jq
-
-      - name: Download AOSP Clang
-        run: |
-          mkdir -p toolchains/clang
-          curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz | tar -xz -C toolchains/clang
-
-      - name: Compile Kernel & Monitor Build Progress
-        id: build-kernel
-        run: |
-          set -euo pipefail
-
-          tg_post_msg() {
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d chat_id="$CHAT_ID" -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true" -d text="$1" > /dev/null
-          }
 
           tg_send_with_button() {
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
@@ -63,6 +35,52 @@ jobs:
               -d disable_web_page_preview="true" -d text="$1" \
               -d reply_markup='{"inline_keyboard": [[{"text": "🔄 Refresh Info", "callback_data": "refresh"}]]}' | jq -r '.result.message_id // empty'
           }
+
+          NOW=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          BUILD_START=$(date +%s)
+
+          INIT_MSG=$(printf "🛠️ *%s* (Android 16 Target) Started\n\n📱 *Device*: \`%s\`\n⌛ *Started At*: \`%s\`\n\n🚀 Initializing runner workspace and setup..." "$KERNEL_NAME" "$DEVICE" "$NOW")
+          PROGRESS_MSG_ID=$(tg_send_with_button "$INIT_MSG")
+
+          echo "PROGRESS_MSG_ID=$PROGRESS_MSG_ID" >> "$GITHUB_ENV"
+          echo "BUILD_START=$BUILD_START" >> "$GITHUB_ENV"
+
+      - name: Free Disk Space & Set Up Swap
+        run: |
+          set -euo pipefail
+
+          echo "Cleaning up runner disk space..."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+
+          echo "Configuring swap space..."
+          if sudo modprobe zram num_devices=1 2>/dev/null && [ -d /sys/block/zram0 ]; then
+            echo zstd | sudo tee /sys/block/zram0/comp_algorithm > /dev/null || true
+            echo 16G | sudo tee /sys/block/zram0/disksize
+            sudo mkswap /dev/zram0
+            sudo swapon -p 32767 /dev/zram0
+            echo "zRAM 16GB configured successfully."
+          else
+            echo "zRAM unavailable on Azure kernel. Creating 10GB Swapfile fallback..."
+            sudo fallocate -l 10G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo "10GB Swapfile enabled."
+          fi
+
+      - name: Install System Dependencies & Clang
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev make gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi unzip lz4 zstd git-lfs curl jq
+
+          mkdir -p toolchains/clang
+          curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz | tar -xz -C toolchains/clang
+
+      - name: Compile Kernel & Monitor Build Progress
+        id: build-kernel
+        run: |
+          set -euo pipefail
 
           tg_edit_with_button() {
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
@@ -130,8 +148,7 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    # Fully formatted via printf to avoid YAML multiline errors
-                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
+                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 Swap: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
                       "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
 
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
@@ -141,19 +158,6 @@ jobs:
               sleep 3
             done
           }
-
-          BUILD_START=$(date +%s)
-          NOW=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-
-          # One-line variables with printf solve the YAML outdent breaking
-          INIT_MSG=$(printf "🛠️ *%s* (Android 16 Target) Triggered\n\n📱 *Device*: \`%s\`\n⌛ *Time*: \`%s\`" "$KERNEL_NAME" "$DEVICE" "$NOW")
-          tg_post_msg "$INIT_MSG"
-
-          INIT_STATUS=$(printf "🚀 Initializing Kernel Compilation...\nTap 🔄 Refresh Info to update stats!")
-          PROGRESS_MSG_ID=$(tg_send_with_button "$INIT_STATUS")
-
-          echo "PROGRESS_MSG_ID=$PROGRESS_MSG_ID" >> "$GITHUB_ENV"
-          echo "BUILD_START=$BUILD_START" >> "$GITHUB_ENV"
 
           listen_refresh &
           LISTENER_PID=$!
@@ -173,7 +177,6 @@ jobs:
 
           make O=out ARCH=arm64 olddefconfig 2>&1 | tee -a "$LOG"
 
-          # Compile Kernel
           make -j$(nproc --all) O=out \
                ARCH=arm64 \
                CC=clang \
@@ -183,7 +186,6 @@ jobs:
                CROSS_COMPILE=aarch64-linux-gnu- \
                CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee -a "$LOG"
 
-          # Kill the background Telegram watcher right after compile finishes
           kill "$LISTENER_PID" 2>/dev/null || true
 
       - name: Package AnyKernel3 Zip & Upload Artifact
