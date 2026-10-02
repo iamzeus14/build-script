@@ -1,4 +1,4 @@
-name: Build Cosmic Kernel (violet - Android 16)
+name: Cosmic Kernel CI Workflow
 
 on:
   workflow_dispatch:
@@ -8,66 +8,51 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      KERNEL_NAME: "Cosmicカーネル"
-      DEVICE: "violet"
-      BRANCH_NAME: "lineage-23.2"
-      USER_TAG: "@IamZeus14"
-      LOG: "build.log"
-      GOFILE_RETRY_MAX: 6
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       CHAT_ID: ${{ secrets.CHAT_ID }}
+      KERNEL_NAME: "Cosmic Core X"
+      DEVICE: "violet"
+      BRANCH_NAME: "lineage-23.2"
+      LOG: "build.log"
+      USER_TAG: "@IamZeus14"
+      GOFILE_RETRY_MAX: 6
 
     steps:
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo apt-get clean
-
-      - name: Set up 16 GB zRAM Swap
-        run: |
-          echo "Setting up 16 GB zRAM..."
-          sudo modprobe zram num_devices=1
-          sudo zramctl /dev/zram0 --size 16G --algorithm zstd
-          sudo mkswap /dev/zram0
-          sudo swapon -p 32767 /dev/zram0
-          echo "zRAM memory status:"
-          free -h
-          swapon -s
-
-      - name: Checkout Kernel Source
+      - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
           repository: CosmicCoreX/cosmic_kernel_violet
           ref: ${{ env.BRANCH_NAME }}
           submodules: recursive
 
-      - name: Set up Build Dependencies & Android 16 AOSP Clang
+      - name: Free Disk Space & Set Up zRAM
+        run: |
+          set -euo pipefail
+
+          # Free runner disk space
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          
+          # Initialize zRAM
+          sudo modprobe zram num_devices=1 || true
+          echo zstd | sudo tee /sys/block/zram0/comp_algorithm > /dev/null || true
+          echo 16G | sudo tee /sys/block/zram0/disksize
+          sudo mkswap /dev/zram0
+          sudo swapon -p 32767 /dev/zram0
+
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl git git-lfs bc bison flex libssl-dev libelf-dev zip unzip lz4 \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi zstd
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev make gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi unzip lz4 zstd git-lfs curl jq
 
-          git config --global user.name "Z E U S"
-          git config --global user.email "iamdrzeus14@gmail.com"
-
-          # Download official AOSP Clang r522817 (Clang 18.0.1) for Android 16
+      - name: Download AOSP Clang
+        run: |
           mkdir -p toolchains/clang
           curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz | tar -xz -C toolchains/clang
 
-      - name: Clean Workspace
+      - name: Compile Kernel & Monitor Build Progress
         run: |
-          make clean || true
-          make mrproper || true
-          rm -rf out/
+          set -euo pipefail
 
-      - name: Build Kernel & Monitor Progress
-        run: |
-          set -o pipefail
-
-          # Telegram Helper Functions
           tg_post_msg() {
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
               -d chat_id="$CHAT_ID" -d parse_mode="Markdown" \
@@ -129,12 +114,11 @@ jobs:
                   UPDATE_ID=$(echo "$UPDATE" | jq -r '.update_id')
                   OFFSET=$((UPDATE_ID + 1))
                   CALLBACK=$(echo "$UPDATE" | jq -r '.callback_query.data // empty')
+                  CALLBACK_ID=$(echo "$UPDATE" | jq -r '.callback_query.id // empty')
 
                   if [ "$CALLBACK" = "refresh" ]; then
-                    CALLBACK_ID=$(echo "$UPDATE" | jq -r '.callback_query.id // empty')
                     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery" \
-                         -d callback_query_id="$CALLBACK_ID" \
-                         -d text="Updating status..." > /dev/null
+                      -d callback_query_id="$CALLBACK_ID" -d text="Updating status..." > /dev/null
 
                     STATS=$(get_stats)
                     CPU=$(echo "$STATS" | cut -d'|' -f1)
@@ -148,24 +132,9 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    MSG_TEXT=$(cat <<EOF
-⚙️ *Building Kernel (Android 16): ${KERNEL_NAME}*
+                    MSG_TEXT=$(printf "⚙️️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
+                      "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
 
-📱 Device: \`${DEVICE}\`
-
-*Server Stats*
-💻 CPU: \`${CPU}%\`
-💾 RAM: \`${MEM_USED}MB / ${MEM_TOTAL}MB\`
-🚀 zRAM: \`${SWAP_USED}MB / ${SWAP_TOTAL}MB\`
-⚡ Load: \`${LOAD}\`
-
-🕛 Elapsed: $(format_time "$ELAPSED")
-🔥 Status: Compiling...
-📟 Console: \`${CONSOLE}\`
-
-🔄 Last Refreshed: \`${NOW_LOCAL}\`
-EOF
-)
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
                   fi
                 done
