@@ -28,11 +28,8 @@ jobs:
       - name: Free Disk Space & Set Up zRAM
         run: |
           set -euo pipefail
-
-          # Free runner disk space
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           
-          # Initialize zRAM
           sudo modprobe zram num_devices=1 || true
           echo zstd | sudo tee /sys/block/zram0/comp_algorithm > /dev/null || true
           echo 16G | sudo tee /sys/block/zram0/disksize
@@ -50,6 +47,7 @@ jobs:
           curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz | tar -xz -C toolchains/clang
 
       - name: Compile Kernel & Monitor Build Progress
+        id: build-kernel
         run: |
           set -euo pipefail
 
@@ -132,21 +130,9 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    MSG_TEXT="⚙️ *Building Kernel (Android 16): ${KERNEL_NAME}*
-
-📱 Device: \`${DEVICE}\`
-
-*Server Stats*
-💻 CPU: \`${CPU}%\`
-💾 RAM: \`${MEM_USED}MB / ${MEM_TOTAL}MB\`
-🚀 zRAM: \`${SWAP_USED}MB / ${SWAP_TOTAL}MB\`
-⚡ Load: \`${LOAD}\`
-
-🕛 Elapsed: $(format_time "$ELAPSED")
-🔥 Status: Compiling...
-📟 Console: \`${CONSOLE}\`
-
-🔄 Last Refreshed: \`${NOW_LOCAL}\`"
+                    # Fully formatted via printf to avoid YAML multiline errors
+                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
+                      "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
 
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
                   fi
@@ -159,20 +145,18 @@ jobs:
           BUILD_START=$(date +%s)
           NOW=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
-          tg_post_msg "🛠️ *${KERNEL_NAME}* (Android 16 Target) Triggered
+          # One-line variables with printf solve the YAML outdent breaking
+          INIT_MSG=$(printf "🛠️ *%s* (Android 16 Target) Triggered\n\n📱 *Device*: \`%s\`\n⌛ *Time*: \`%s\`" "$KERNEL_NAME" "$DEVICE" "$NOW")
+          tg_post_msg "$INIT_MSG"
 
-📱 *Device*: \`${DEVICE}\`
-⌛ *Time*: \`${NOW}\`"
+          INIT_STATUS=$(printf "🚀 Initializing Kernel Compilation...\nTap 🔄 Refresh Info to update stats!")
+          PROGRESS_MSG_ID=$(tg_send_with_button "$INIT_STATUS")
 
-          PROGRESS_MSG_ID=$(tg_send_with_button "🚀 Initializing Kernel Compilation...
-Tap 🔄 Refresh Info to update stats!")
-
-          echo "PROGRESS_MSG_ID=$PROGRESS_MSG_ID" >> $GITHUB_ENV
-          echo "BUILD_START=$BUILD_START" >> $GITHUB_ENV
+          echo "PROGRESS_MSG_ID=$PROGRESS_MSG_ID" >> "$GITHUB_ENV"
+          echo "BUILD_START=$BUILD_START" >> "$GITHUB_ENV"
 
           listen_refresh &
           LISTENER_PID=$!
-          echo "LISTENER_PID=$LISTENER_PID" >> $GITHUB_ENV
 
           export ARCH=arm64
           export SUBARCH=arm64
@@ -183,12 +167,10 @@ Tap 🔄 Refresh Info to update stats!")
           touch "$LOG"
           mkdir -p out
 
-          # Merge base defconfig and violet fragment
           ARCH=arm64 ./scripts/kconfig/merge_config.sh -m -O out \
                arch/arm64/configs/vendor/sdmsteppe-perf_defconfig \
                arch/arm64/configs/vendor/violet.config 2>&1 | tee -a "$LOG"
 
-          # Resolve missing/updated dependency keys
           make O=out ARCH=arm64 olddefconfig 2>&1 | tee -a "$LOG"
 
           # Compile Kernel
@@ -201,14 +183,12 @@ Tap 🔄 Refresh Info to update stats!")
                CROSS_COMPILE=aarch64-linux-gnu- \
                CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee -a "$LOG"
 
+          # Kill the background Telegram watcher right after compile finishes
+          kill "$LISTENER_PID" 2>/dev/null || true
+
       - name: Package AnyKernel3 Zip & Upload Artifact
         if: always()
         run: |
-          if [ -n "${LISTENER_PID:-}" ]; then
-            kill "$LISTENER_PID" 2>/dev/null || true
-            wait "$LISTENER_PID" 2>/dev/null || true
-          fi
-
           tg_post_msg() {
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
               -d chat_id="$CHAT_ID" -d parse_mode="Markdown" \
@@ -276,24 +256,14 @@ Tap 🔄 Refresh Info to update stats!")
             mapfile -t GOFILE_SERVERS < <(curl -s "https://gofile.io/api/v2/getServers" | jq -r '.data.servers[].name // empty')
 
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
-              tg_edit_msg "$PROGRESS_MSG_ID" "⚙️ *Building Kernel: ${KERNEL_NAME}*
-
-📱 Device: \`${DEVICE}\`
-🔥 Status: ✅ Success
-🕛 Time: ${TIME_FMT}
-📦 Uploading flashable zip..."
+              SUCCESS_EDIT=$(printf "⚙️ *Building Kernel: %s*\n\n📱 Device: \`%s\`\n🔥 Status: ✅ Success\n🕛 Time: %s\n📦 Uploading flashable zip..." "$KERNEL_NAME" "$DEVICE" "$TIME_FMT")
+              tg_edit_msg "$PROGRESS_MSG_ID" "$SUCCESS_EDIT"
             fi
 
-            LINK=$(gofile_upload "${ZIP_NAME}")
+            LINK=$(gofile_upload "${ZIP_NAME}" || echo "")
 
             if [ -n "$LINK" ]; then
-              FINAL_MSG="🎉 *${KERNEL_NAME} \vert{}${DEVICE} (Android 16) — Build Complete*
-━━━━━━━━━━━━━━━━━━
-
-📦 [${ZIP_NAME}](${LINK})
-
-👤 By: \`${USER_TAG}\`
-🕛 Build Time: ${TIME_FMT}"
+              FINAL_MSG=$(printf "🎉 *%s | %s (Android 16) — Build Complete*\n━━━━━━━━━━━━━━━━━━\n\n📦 [%s](%s)\n\n👤 By: \`%s\`\n🕛 Build Time: %s" "$KERNEL_NAME" "$DEVICE" "$ZIP_NAME" "$LINK" "$USER_TAG" "$TIME_FMT")
             else
               FINAL_MSG="⚠ Kernel compiled successfully, but GoFile upload failed."
             fi
@@ -302,11 +272,8 @@ Tap 🔄 Refresh Info to update stats!")
 
           else
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
-              tg_edit_msg "$PROGRESS_MSG_ID" "⚙️ *Building Kernel: ${KERNEL_NAME}*
-
-📱 Device: \`${DEVICE}\`
-🔥 Status: ❌ Failed
-🕛 Time: ${TIME_FMT}"
+              FAIL_EDIT=$(printf "⚙️ *Building Kernel: %s*\n\n📱 Device: \`%s\`\n🔥 Status: ❌ Failed\n🕛 Time: %s" "$KERNEL_NAME" "$DEVICE" "$TIME_FMT")
+              tg_edit_msg "$PROGRESS_MSG_ID" "$FAIL_EDIT"
             fi
 
             if [ -f "$LOG" ]; then
