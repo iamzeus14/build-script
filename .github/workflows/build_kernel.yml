@@ -132,7 +132,7 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    MSG_TEXT=$(printf "⚙️️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
+                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
                       "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
 
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
@@ -191,7 +191,7 @@ Tap 🔄 Refresh Info to update stats!")
       - name: Package AnyKernel3 Zip & Upload Artifact
         if: always()
         run: |
-          if [ -n "$LISTENER_PID" ]; then
+          if [ -n "${LISTENER_PID:-}" ]; then
             kill "$LISTENER_PID" 2>/dev/null || true
             wait "$LISTENER_PID" 2>/dev/null || true
           fi
@@ -247,7 +247,7 @@ Tap 🔄 Refresh Info to update stats!")
           }
 
           BUILD_END=$(date +%s)
-          TIME=$(( BUILD_END - BUILD_START ))
+          TIME=$(( BUILD_END -${BUILD_START:-BUILD_END} ))
           TIME_FMT=$(format_time "$TIME")
 
           IMAGE_PATH="out/arch/arm64/boot/Image.gz-dtb"
@@ -262,7 +262,7 @@ Tap 🔄 Refresh Info to update stats!")
 
             mapfile -t GOFILE_SERVERS < <(curl -s "https://gofile.io/api/v2/getServers" | jq -r '.data.servers[].name // empty')
 
-            if [ -n "$PROGRESS_MSG_ID" ]; then
+            if [ -n "${PROGRESS_MSG_ID:-}" ]; then
               tg_edit_msg "$PROGRESS_MSG_ID" "⚙️ *Building Kernel: ${KERNEL_NAME}*
 
 📱 Device: \`${DEVICE}\`
@@ -288,7 +288,7 @@ Tap 🔄 Refresh Info to update stats!")
             tg_post_msg "$FINAL_MSG"
 
           else
-            if [ -n "$PROGRESS_MSG_ID" ]; then
+            if [ -n "${PROGRESS_MSG_ID:-}" ]; then
               tg_edit_msg "$PROGRESS_MSG_ID" "⚙️ *Building Kernel: ${KERNEL_NAME}*
 
 📱 Device: \`${DEVICE}\`
