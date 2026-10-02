@@ -29,18 +29,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          tg_send_with_button() {
+          tg_send_init() {
+            local text="$1"
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d chat_id="$CHAT_ID" -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true" -d text="$1" \
-              -d reply_markup='{"inline_keyboard": [[{"text": "🔄 Refresh Info", "callback_data": "refresh"}]]}' | jq -r '.result.message_id // empty'
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                    --arg chat_id "$CHAT_ID" \
+                    --arg text "$text" \
+                    '{
+                      chat_id: $chat_id,
+                      text: $text,
+                      parse_mode: "HTML",
+                      disable_web_page_preview: true,
+                      reply_markup: {
+                        inline_keyboard: [[{text: "🔄 Refresh Info", callback_data: "refresh"}]]
+                      }
+                    }')" | jq -r '.result.message_id // empty'
           }
 
           NOW=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           BUILD_START=$(date +%s)
 
-          INIT_MSG=$(printf "🛠️ *%s* (Android 16 Target) Started\n\n📱 *Device*: \`%s\`\n⌛ *Started At*: \`%s\`\n\n🚀 Initializing runner workspace and setup..." "$KERNEL_NAME" "$DEVICE" "$NOW")
-          PROGRESS_MSG_ID=$(tg_send_with_button "$INIT_MSG")
+          INIT_HTML="<b>⚙️ ${KERNEL_NAME} (Android 16) Started</b>
+
+<b>📱 Device:</b> <code>${DEVICE}</code>
+<b>⌛ Started At:</b> <code>${NOW}</code>
+
+🚀 <i>Initializing runner workspace and build dependencies...</i>"
+
+          PROGRESS_MSG_ID=$(tg_send_init "$INIT_HTML")
 
           echo "PROGRESS_MSG_ID=$PROGRESS_MSG_ID" >> "$GITHUB_ENV"
           echo "BUILD_START=$BUILD_START" >> "$GITHUB_ENV"
@@ -60,12 +77,14 @@ jobs:
             sudo swapon -p 32767 /dev/zram0
             echo "zRAM 16GB configured successfully."
           else
-            echo "zRAM unavailable on Azure kernel. Creating 10GB Swapfile fallback..."
+            echo "zRAM unavailable on Azure kernel. Resetting existing swap & creating 10GB swapfile..."
+            sudo swapoff -a 2>/dev/null || true
+            sudo rm -f /swapfile
             sudo fallocate -l 10G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
             sudo chmod 600 /swapfile
             sudo mkswap /swapfile
             sudo swapon /swapfile
-            echo "10GB Swapfile enabled."
+            echo "10GB Swapfile enabled successfully."
           fi
 
       - name: Install System Dependencies & Clang
@@ -82,80 +101,126 @@ jobs:
         run: |
           set -euo pipefail
 
-          tg_edit_with_button() {
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
-              -d chat_id="$CHAT_ID" -d message_id="$1" -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true" -d text="$2" \
-              -d reply_markup='{"inline_keyboard": [[{"text": "🔄 Refresh Info", "callback_data": "refresh"}]]}' > /dev/null
-          }
-
           format_time() {
             local SECS=$1
             local h=$(( SECS / 3600 ))
             local m=$(( (SECS % 3600) / 60 ))
             local s=$(( SECS % 60 ))
             if [ "$h" -gt 0 ]; then
-              echo "${h} hr ${m} min${s} sec"
+              echo "${h}h ${m}m ${s}s"
             else
-              echo "${m} min${s} sec"
+              echo "${m}m ${s}s"
             fi
           }
 
-          get_stats() {
+          get_system_stats() {
+            local mem_info=$(free -m | awk '/Mem:/ {print $2" "$3}')
+            local mem_total=$(echo "$mem_info" | awk '{print $1}')
+            local mem_used=$(echo "$mem_info" | awk '{print $2}')
+
+            local swap_info=$(free -m | awk '/Swap:/ {print $2" "$3}')
+            local swap_total=$(echo "$swap_info" | awk '{print $1}')
+            local swap_used=$(echo "$swap_info" | awk '{print $2}')
+
+            local load=$(cut -d' ' -f1 /proc/loadavg)
+
+            local cpu_idle1 cpu_total1 cpu_idle2 cpu_total2
             read -r _ u1 n1 s1 i1 w1 irq1 sirq1 st1 _ < /proc/stat
-            sleep 1
+            cpu_idle1=$((i1 + w1))
+            cpu_total1=$((u1 + n1 + s1 + i1 + w1 + irq1 + sirq1 + st1))
+            sleep 0.5
             read -r _ u2 n2 s2 i2 w2 irq2 sirq2 st2 _ < /proc/stat
-            idle1=$((i1 + w1)); idle2=$((i2 + w2))
-            total1=$((u1 + n1 + s1 + i1 + w1 + irq1 + sirq1 + st1))
-            total2=$((u2 + n2 + s2 + i2 + w2 + irq2 + sirq2 + st2))
-            diff_idle=$((idle2 - idle1)); diff_total=$((total2 - total1))
-            local CPU=0
-            [ "$diff_total" -gt 0 ] && CPU=$(( 100 * (diff_total - diff_idle) / diff_total ))
-            MEM_USED=$(free -m | awk '/Mem:/ {print $3}')
-            MEM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
-            SWAP_USED=$(free -m | awk '/Swap:/ {print $3}')
-            SWAP_TOTAL=$(free -m | awk '/Swap:/ {print $2}')
-            LOAD=$(cut -d' ' -f1 /proc/loadavg)
-            echo "${CPU}\vert{}${MEM_USED}|${MEM_TOTAL}\vert{}${LOAD}|${SWAP_USED}\vert{}${SWAP_TOTAL}"
+            cpu_idle2=$((i2 + w2))
+            cpu_total2=$((u2 + n2 + s2 + i2 + w2 + irq2 + sirq2 + st2))
+            local diff_idle=$((cpu_idle2 - cpu_idle1))
+            local diff_total=$((cpu_total2 - cpu_total1))
+            local cpu_pct=0
+            if [ "$diff_total" -gt 0 ]; then
+              cpu_pct=$(( 100 * (diff_total - diff_idle) / diff_total ))
+            fi
+
+            echo "${cpu_pct}|${mem_used}|${mem_total}|${swap_used}|${swap_total}|${load}"
+          }
+
+          get_last_log_line() {
+            if [ -f "$LOG" ] && [ -s "$LOG" ]; then
+              tail -n 30 "$LOG" | grep -v '^\s*$' | tail -n 1 | cut -c1-100
+            else
+              echo "Starting build process..."
+            fi
+          }
+
+          update_tg_status() {
+            local msg_id="$1"
+            local text="$2"
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                    --arg chat_id "$CHAT_ID" \
+                    --arg message_id "$msg_id" \
+                    --arg text "$text" \
+                    '{
+                      chat_id: $chat_id,
+                      message_id: $message_id,
+                      text: $text,
+                      parse_mode: "HTML",
+                      disable_web_page_preview: true,
+                      reply_markup: {
+                        inline_keyboard: [[{text: "🔄 Refresh Info", callback_data: "refresh"}]]
+                      }
+                    }')" > /dev/null
           }
 
           listen_refresh() {
-            local OFFSET=0
+            set +e
+            local offset=0
             while true; do
-              UPDATES=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${OFFSET}")
-              COUNT=$(echo "$UPDATES" | jq -r '.result | length // 0')
-              if [ "$COUNT" -gt 0 ]; then
-                for ((i=0; i<COUNT; i++)); do
-                  UPDATE=$(echo "$UPDATES" \vert{} jq -c ".result[$i]")
-                  UPDATE_ID=$(echo "$UPDATE" | jq -r '.update_id')
-                  OFFSET=$((UPDATE_ID + 1))
-                  CALLBACK=$(echo "$UPDATE" | jq -r '.callback_query.data // empty')
-                  CALLBACK_ID=$(echo "$UPDATE" | jq -r '.callback_query.id // empty')
+              UPDATES=$(curl -s --max-time 10 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&timeout=5")
+              if [ -n "$UPDATES" ]; then
+                OK=$(echo "$UPDATES" | jq -r '.ok // false')
+                if [ "$OK" = "true" ]; then
+                  COUNT=$(echo "$UPDATES" | jq -r '.result | length // 0')
+                  for ((i=0; i<COUNT; i++)); do
+                    UPDATE=$(echo "$UPDATES" | jq -c ".result[$i]")
+                    UPDATE_ID=$(echo "$UPDATE" | jq -r '.update_id')
+                    offset=$((UPDATE_ID + 1))
+                    CALLBACK_DATA=$(echo "$UPDATE" | jq -r '.callback_query.data // empty')
+                    CALLBACK_ID=$(echo "$UPDATE" | jq -r '.callback_query.id // empty')
 
-                  if [ "$CALLBACK" = "refresh" ]; then
-                    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery" \
-                      -d callback_query_id="$CALLBACK_ID" -d text="Updating status..." > /dev/null
+                    if [ "$CALLBACK_DATA" = "refresh" ]; then
+                      curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery" \
+                        -d "callback_query_id=${CALLBACK_ID}" \
+                        -d "text=Fetching fresh system stats..." > /dev/null
 
-                    STATS=$(get_stats)
-                    CPU=$(echo "$STATS" | cut -d'|' -f1)
-                    MEM_USED=$(echo "$STATS" | cut -d'|' -f2)
-                    MEM_TOTAL=$(echo "$STATS" | cut -d'|' -f3)
-                    LOAD=$(echo "$STATS" | cut -d'|' -f4)
-                    SWAP_USED=$(echo "$STATS" | cut -d'|' -f5)
-                    SWAP_TOTAL=$(echo "$STATS" | cut -d'|' -f6)
+                      IFS='|' read -r CPU MEM_U MEM_T SWAP_U SWAP_T LOAD <<< "$(get_system_stats)"
+                      CONSOLE=$(get_last_log_line)
+                      ELAPSED=$(($(date +%s) - BUILD_START))
+                      TIME_STR=$(format_time "$ELAPSED")
+                      NOW_TIME=$(date -u +"%H:%M:%S UTC")
 
-                    ELAPSED=$(($(date +%s) - BUILD_START ))
-                    CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
-                    NOW_LOCAL=$(date +"%H:%M:%S")
+                      MSG_HTML="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
 
-                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 Swap: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
-                      "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
+<b>📱 Device:</b> <code>${DEVICE}</code>
+<b>🔥 Status:</b> <code>Compiling...</code>
 
-                    tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
-                  fi
-                done
+<b>📊 Server Real-Time Metrics:</b>
+• <b>CPU Usage:</b> <code>${CPU}%</code>
+• <b>RAM Usage:</b> <code>${MEM_U} MB / ${MEM_T} MB</code>
+• <b>Swap Usage:</b> <code>${SWAP_U} MB / ${SWAP_T} MB</code>
+• <b>Load Avg:</b> <code>${LOAD}</code>
+
+<b>⏱️ Elapsed Time:</b> <code>${TIME_STR}</code>
+<b>📟 Console Output:</b>
+<code>${CONSOLE}</code>
+
+<i>🔄 Refreshed At: ${NOW_TIME}</i>"
+
+                      update_tg_status "$PROGRESS_MSG_ID" "$MSG_HTML"
+                    fi
+                  done
+                fi
               fi
-              sleep 3
+              sleep 1
             done
           }
 
@@ -191,16 +256,33 @@ jobs:
       - name: Package AnyKernel3 Zip & Upload Artifact
         if: always()
         run: |
+          format_time() {
+            local SECS=$1
+            local h=$(( SECS / 3600 ))
+            local m=$(( (SECS % 3600) / 60 ))
+            local s=$(( SECS % 60 ))
+            if [ "$h" -gt 0 ]; then
+              echo "${h}h ${m}m ${s}s"
+            else
+              echo "${m}m ${s}s"
+            fi
+          }
+
           tg_post_msg() {
+            local text="$1"
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d chat_id="$CHAT_ID" -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true" -d text="$1" > /dev/null
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg chat_id "$CHAT_ID" --arg text "$text" \
+                    '{chat_id: $chat_id, text: $text, parse_mode: "HTML", disable_web_page_preview: true}')" > /dev/null
           }
 
           tg_edit_msg() {
+            local msg_id="$1"
+            local text="$2"
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
-              -d chat_id="$CHAT_ID" -d message_id="$1" -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true" -d text="$2" > /dev/null
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg chat_id "$CHAT_ID" --arg message_id "$msg_id" --arg text "$text" \
+                    '{chat_id: $chat_id, message_id: $message_id, text: $text, parse_mode: "HTML", disable_web_page_preview: true}')" > /dev/null
           }
 
           tg_send_file() {
@@ -208,24 +290,12 @@ jobs:
               -F chat_id="$CHAT_ID" -F document=@"$1" -F caption="$2" > /dev/null
           }
 
-          format_time() {
-            local SECS=$1
-            local h=$(( SECS / 3600 ))
-            local m=$(( (SECS % 3600) / 60 ))
-            local s=$(( SECS % 60 ))
-            if [ "$h" -gt 0 ]; then
-              echo "${h} hr ${m} min${s} sec"
-            else
-              echo "${m} min${s} sec"
-            fi
-          }
-
           gofile_upload() {
             local FILE="$1"
             local FILENAME=$(basename "$FILE")
             [ ! -f "$FILE" ] && echo "⚠️ Skipped: $FILENAME" >&2 && return 1
 
-            for SERVER in $(printf "\%s\n" "${GOFILE_SERVERS[@]}" | shuf); do
+            for SERVER in $(printf "%s\n" "${GOFILE_SERVERS[@]}" | shuf); do
               local ATTEMPT=0
               while [ "$ATTEMPT" -lt "$GOFILE_RETRY_MAX" ]; do
                 ATTEMPT=$(( ATTEMPT + 1 ))
@@ -242,7 +312,7 @@ jobs:
           }
 
           BUILD_END=$(date +%s)
-          TIME=$(( BUILD_END -${BUILD_START:-BUILD_END} ))
+          TIME=$(( BUILD_END - ${BUILD_START:-BUILD_END} ))
           TIME_FMT=$(format_time "$TIME")
 
           IMAGE_PATH="out/arch/arm64/boot/Image.gz-dtb"
@@ -258,23 +328,38 @@ jobs:
             mapfile -t GOFILE_SERVERS < <(curl -s "https://gofile.io/api/v2/getServers" | jq -r '.data.servers[].name // empty')
 
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
-              SUCCESS_EDIT=$(printf "⚙️ *Building Kernel: %s*\n\n📱 Device: \`%s\`\n🔥 Status: ✅ Success\n🕛 Time: %s\n📦 Uploading flashable zip..." "$KERNEL_NAME" "$DEVICE" "$TIME_FMT")
+              SUCCESS_EDIT="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
+
+<b>📱 Device:</b> <code>${DEVICE}</code>
+<b>🔥 Status:</b> ✅ <code>Success</code>
+<b>🕛 Duration:</b> <code>${TIME_FMT}</code>
+📦 <i>Uploading flashable zip artifact...</i>"
               tg_edit_msg "$PROGRESS_MSG_ID" "$SUCCESS_EDIT"
             fi
 
             LINK=$(gofile_upload "${ZIP_NAME}" || echo "")
 
             if [ -n "$LINK" ]; then
-              FINAL_MSG=$(printf "🎉 *%s | %s (Android 16) — Build Complete*\n━━━━━━━━━━━━━━━━━━\n\n📦 [%s](%s)\n\n👤 By: \`%s\`\n🕛 Build Time: %s" "$KERNEL_NAME" "$DEVICE" "$ZIP_NAME" "$LINK" "$USER_TAG" "$TIME_FMT")
+              FINAL_MSG="🎉 <b>${KERNEL_NAME} | ${DEVICE} (Android 16) — Build Complete</b>
+━━━━━━━━━━━━━━━━━━
+
+📦 <b><a href=\"${LINK}\">${ZIP_NAME}</a></b>
+
+👤 <b>Maintainer:</b> <code>${USER_TAG}</code>
+🕛 <b>Total Build Time:</b> <code>${TIME_FMT}</code>"
             else
-              FINAL_MSG="⚠ Kernel compiled successfully, but GoFile upload failed."
+              FINAL_MSG="⚠️ Kernel compiled successfully, but GoFile upload failed."
             fi
 
             tg_post_msg "$FINAL_MSG"
 
           else
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
-              FAIL_EDIT=$(printf "⚙️ *Building Kernel: %s*\n\n📱 Device: \`%s\`\n🔥 Status: ❌ Failed\n🕛 Time: %s" "$KERNEL_NAME" "$DEVICE" "$TIME_FMT")
+              FAIL_EDIT="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
+
+<b>📱 Device:</b> <code>${DEVICE}</code>
+<b>🔥 Status:</b> ❌ <code>Failed</code>
+<b>🕛 Duration:</b> <code>${TIME_FMT}</code>"
               tg_edit_msg "$PROGRESS_MSG_ID" "$FAIL_EDIT"
             fi
 
