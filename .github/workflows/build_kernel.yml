@@ -148,7 +148,8 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    MSG_TEXT="⚙️ *Building Kernel (Android 16): ${KERNEL_NAME}*
+                    MSG_TEXT=$(cat <<EOF
+⚙️ *Building Kernel (Android 16): ${KERNEL_NAME}*
 
 📱 Device: \`${DEVICE}\`
 
@@ -162,8 +163,9 @@ jobs:
 🔥 Status: Compiling...
 📟 Console: \`${CONSOLE}\`
 
-🔄 Last Refreshed: \`${NOW_LOCAL}\`"
-
+🔄 Last Refreshed: \`${NOW_LOCAL}\`
+EOF
+)
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
                   fi
                 done
@@ -311,7 +313,7 @@ Tap 🔄 Refresh Info to update stats!")
 👤 By: \`${USER_TAG}\`
 🕛 Build Time: ${TIME_FMT}"
             else
-              FINAL_MSG="⚠️️ Kernel compiled successfully, but GoFile upload failed."
+              FINAL_MSG="⚠ Kernel compiled successfully, but GoFile upload failed."
             fi
 
             tg_post_msg "$FINAL_MSG"
