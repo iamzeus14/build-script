@@ -52,10 +52,10 @@ jobs:
 
           INIT_HTML="<b>⚙️ ${KERNEL_NAME} (Android 16) Started</b>
 
-<b>📱 Device:</b> <code>${DEVICE}</code>
-<b>⌛ Started At:</b> <code>${NOW}</code>
+          <b>📱 Device:</b> <code>${DEVICE}</code>
+          <b>⌛ Started At:</b> <code>${NOW}</code>
 
-🚀 <i>Initializing runner workspace and build dependencies...</i>"
+          🚀 <i>Initializing runner workspace and build dependencies...</i>"
 
           PROGRESS_MSG_ID=$(tg_send_init "$INIT_HTML")
 
@@ -200,20 +200,20 @@ jobs:
 
                       MSG_HTML="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
 
-<b>📱 Device:</b> <code>${DEVICE}</code>
-<b>🔥 Status:</b> <code>Compiling...</code>
+                      <b>📱 Device:</b> <code>${DEVICE}</code>
+                      <b>🔥 Status:</b> <code>Compiling...</code>
 
-<b>📊 Server Real-Time Metrics:</b>
-• <b>CPU Usage:</b> <code>${CPU}%</code>
-• <b>RAM Usage:</b> <code>${MEM_U} MB / ${MEM_T} MB</code>
-• <b>Swap Usage:</b> <code>${SWAP_U} MB / ${SWAP_T} MB</code>
-• <b>Load Avg:</b> <code>${LOAD}</code>
+                      <b>📊 Server Real-Time Metrics:</b>
+                      • <b>CPU Usage:</b> <code>${CPU}%</code>
+                      • <b>RAM Usage:</b> <code>${MEM_U} MB / ${MEM_T} MB</code>
+                      • <b>Swap Usage:</b> <code>${SWAP_U} MB / ${SWAP_T} MB</code>
+                      • <b>Load Avg:</b> <code>${LOAD}</code>
 
-<b>⏱️ Elapsed Time:</b> <code>${TIME_STR}</code>
-<b>📟 Console Output:</b>
-<code>${CONSOLE}</code>
+                      <b>⏱️ Elapsed Time:</b> <code>${TIME_STR}</code>
+                      <b>📟 Console Output:</b>
+                      <code>${CONSOLE}</code>
 
-<i>🔄 Refreshed At: ${NOW_TIME}</i>"
+                      <i>🔄 Refreshed At: ${NOW_TIME}</i>"
 
                       update_tg_status "$PROGRESS_MSG_ID" "$MSG_HTML"
                     fi
@@ -330,10 +330,10 @@ jobs:
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
               SUCCESS_EDIT="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
 
-<b>📱 Device:</b> <code>${DEVICE}</code>
-<b>🔥 Status:</b> ✅ <code>Success</code>
-<b>🕛 Duration:</b> <code>${TIME_FMT}</code>
-📦 <i>Uploading flashable zip artifact...</i>"
+              <b>📱 Device:</b> <code>${DEVICE}</code>
+              <b>🔥 Status:</b> ✅ <code>Success</code>
+              <b>🕛 Duration:</b> <code>${TIME_FMT}</code>
+              📦 <i>Uploading flashable zip artifact...</i>"
               tg_edit_msg "$PROGRESS_MSG_ID" "$SUCCESS_EDIT"
             fi
 
@@ -341,12 +341,12 @@ jobs:
 
             if [ -n "$LINK" ]; then
               FINAL_MSG="🎉 <b>${KERNEL_NAME} | ${DEVICE} (Android 16) — Build Complete</b>
-━━━━━━━━━━━━━━━━━━
+              ━━━━━━━━━━━━━━━━━━
 
-📦 <b><a href=\"${LINK}\">${ZIP_NAME}</a></b>
+              📦 <b><a href=\"${LINK}\">${ZIP_NAME}</a></b>
 
-👤 <b>Maintainer:</b> <code>${USER_TAG}</code>
-🕛 <b>Total Build Time:</b> <code>${TIME_FMT}</code>"
+              👤 <b>Maintainer:</b> <code>${USER_TAG}</code>
+              🕛 <b>Total Build Time:</b> <code>${TIME_FMT}</code>"
             else
               FINAL_MSG="⚠️ Kernel compiled successfully, but GoFile upload failed."
             fi
@@ -357,9 +357,9 @@ jobs:
             if [ -n "${PROGRESS_MSG_ID:-}" ]; then
               FAIL_EDIT="<b>⚙️ Building Kernel: ${KERNEL_NAME}</b>
 
-<b>📱 Device:</b> <code>${DEVICE}</code>
-<b>🔥 Status:</b> ❌ <code>Failed</code>
-<b>🕛 Duration:</b> <code>${TIME_FMT}</code>"
+              <b>📱 Device:</b> <code>${DEVICE}</code>
+              <b>🔥 Status:</b> ❌ <code>Failed</code>
+              <b>🕛 Duration:</b> <code>${TIME_FMT}</code>"
               tg_edit_msg "$PROGRESS_MSG_ID" "$FAIL_EDIT"
             fi
 
