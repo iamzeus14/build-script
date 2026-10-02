@@ -40,7 +40,7 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
           git config --global user.name "iamZeus14"
-          git config --global user.email "krishnakripa34567@gmail.com"
+          git config --global user.email "iamdrzeus14@gmail.com"
 
           # Download official AOSP Clang r522817 (Clang 18.0.1) for Android 16
           mkdir -p toolchains/clang
