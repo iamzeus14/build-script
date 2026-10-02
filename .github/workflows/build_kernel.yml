@@ -132,8 +132,21 @@ jobs:
                     CONSOLE=$(grep -v '^\s*$' "$LOG" 2>/dev/null | tail -n1 | cut -c1-100 | sed 's/[^a-zA-Z0-9 _-]/./g')
                     NOW_LOCAL=$(date +"%H:%M:%S")
 
-                    MSG_TEXT=$(printf "⚙️ *Building Kernel (Android 16): %s*\n\n📱 Device: \`%s\`\n\n*Server Stats*\n💻 CPU: \`%s%%\`\n💾 RAM: \`%sMB / %sMB\`\n🚀 zRAM: \`%sMB / %sMB\`\n⚡ Load: \`%s\`\n\n🕛 Elapsed: %s\n🔥 Status: Compiling...\n📟 Console: \`%s\`\n\n🔄 Last Refreshed: \`%s\`" \
-                      "$KERNEL_NAME" "$DEVICE" "$CPU" "$MEM_USED" "$MEM_TOTAL" "$SWAP_USED" "$SWAP_TOTAL" "$LOAD" "$(format_time "$ELAPSED")" "$CONSOLE" "$NOW_LOCAL")
+                    MSG_TEXT="⚙️ *Building Kernel (Android 16): ${KERNEL_NAME}*
+
+📱 Device: \`${DEVICE}\`
+
+*Server Stats*
+💻 CPU: \`${CPU}%\`
+💾 RAM: \`${MEM_USED}MB / ${MEM_TOTAL}MB\`
+🚀 zRAM: \`${SWAP_USED}MB / ${SWAP_TOTAL}MB\`
+⚡ Load: \`${LOAD}\`
+
+🕛 Elapsed: $(format_time "$ELAPSED")
+🔥 Status: Compiling...
+📟 Console: \`${CONSOLE}\`
+
+🔄 Last Refreshed: \`${NOW_LOCAL}\`"
 
                     tg_edit_with_button "$PROGRESS_MSG_ID" "$MSG_TEXT"
                   fi
